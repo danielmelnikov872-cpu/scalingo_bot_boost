@@ -24,8 +24,8 @@ from aiogram.types import (
 # Лучше хранить токены в переменных окружения:
 # export BOT_TOKEN="..."
 # export PROVIDER_TOKEN="..."
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PASTE_YOUR_BOT_TOKEN_HERE")
-PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "PASTE_YOOKASSA_PROVIDER_TOKEN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8137546517:AAGno-CJPZ9C8-bbC7KccoGhPHaGiQZCMdw")
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "381764678:TEST:1251602")
 
 # URL мини-приложения (сайт)
 WEBAPP_URL_BASE = "https://www.boostt.ru/"
@@ -47,7 +47,7 @@ dp = Dispatcher()
 # =========================
 # SIMPLE DB (SQLite)
 # =========================
-DB_PATH = os.getenv("DB_PATH", "bot_data.db")
+DB_PATH = os.getenv("DB_PATH", "/opt/tgbot/data/bot_data.db")
 _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 _conn.execute(
     """
