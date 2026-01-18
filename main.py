@@ -45,7 +45,7 @@ dp = Dispatcher()
 # =========================
 # SIMPLE DB (SQLite)
 # =========================
-DB_PATH = os.getenv("DB_PATH", "/opt/tgbot/data/bot_data.db")
+DB_PATH = os.getenv("DB_PATH", "/opt/tgbot/scalingo_bot_boost/data/bot_data.db")
 _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 _conn.execute(
     """
