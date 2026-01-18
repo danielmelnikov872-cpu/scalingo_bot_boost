@@ -1,11 +1,10 @@
-# bot_updated_v3
 import asyncio
 import json
 import logging
 import os
 import sqlite3
 import uuid
-from typing import Optional, Tuple
+from typing import Tuple
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.enums import ParseMode
@@ -20,16 +19,15 @@ from aiogram.types import (
 # =========================
 # CONFIG
 # =========================
-
 # Лучше хранить токены в переменных окружения:
 # export BOT_TOKEN="..."
 # export PROVIDER_TOKEN="..."
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8137546517:AAGno-CJPZ9C8-bbC7KccoGhPHaGiQZCMdw")
-PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "381764678:TEST:1251602")
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "381764678:TEST:161391")
 
 # URL мини-приложения (сайт)
 WEBAPP_URL_BASE = "https://www.boostt.ru/"
-# Параметр, который сайт читает как баланс (см. патч в HTML)
+# Параметр, который сайт читает как баланс
 WEBAPP_BALANCE_PARAM = "tgBalance"
 
 # =========================
@@ -47,7 +45,7 @@ dp = Dispatcher()
 # =========================
 # SIMPLE DB (SQLite)
 # =========================
-DB_PATH = os.getenv("DB_PATH", "/home/yourusername/bot_data.db")
+DB_PATH = os.getenv("DB_PATH", "/opt/tgbot/data/bot_data.db")
 _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 _conn.execute(
     """
@@ -106,14 +104,13 @@ def _format_rub_from_kopecks(v: int) -> str:
 def _webapp_url_for_user(user_id: int) -> str:
     bal_k = _get_balance_kopecks(user_id)
     bal_rub = bal_k / 100.0
-    # передаём баланс в URL, чтобы сайт смог обновить UI и localStorage
     return f"{WEBAPP_URL_BASE}?{WEBAPP_BALANCE_PARAM}={bal_rub:.2f}"
 
 
 # =========================
 # TEMP ORDER STORAGE
 # =========================
-# В проде лучше БД. Здесь оставляем как у тебя, но добавляем типы.
+# В проде лучше БД, но оставляем как у вас.
 user_orders = {}
 awaiting_custom_topup = set()  # user_id, которые ввели "другая сумма"
 
@@ -122,6 +119,9 @@ awaiting_custom_topup = set()  # user_id, которые ввели "друга�
 # UI BUILDERS
 # =========================
 def main_menu_kb(user_id: int) -> InlineKeyboardMarkup:
+    """
+    Главное меню без кнопок "Аккаунты" и "Рассылка".
+    """
     webapp_url = _webapp_url_for_user(user_id)
     keyboard = [
         [
@@ -129,29 +129,16 @@ def main_menu_kb(user_id: int) -> InlineKeyboardMarkup:
                 text="📈 Накрутка",
                 web_app=WebAppInfo(url=webapp_url),
             ),
-            InlineKeyboardButton(text="🔐 Аккаунты", callback_data="accounts"),
         ],
         [
             InlineKeyboardButton(text="💳 Баланс", callback_data="balance_menu"),
         ],
-        [
-            InlineKeyboardButton(text="🤖 Рассылка", callback_data="mailing_menu"),
-        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def topup_methods_kb(need_rub: Optional[int] = None) -> InlineKeyboardMarkup:
+def topup_amounts_kb(need_rub: int = 0) -> InlineKeyboardMarkup:
     need = int(need_rub or 0)
-    keyboard = [
-        [InlineKeyboardButton(text="💳 ЮKassa", callback_data=f"topup_yk_{need}")],
-        [InlineKeyboardButton(text="🪙 Крипта", callback_data=f"topup_crypto_{need}")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def topup_amounts_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton(text="100 ₽", callback_data="topup_amount_100"),
@@ -162,7 +149,10 @@ def topup_amounts_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="1000 ₽", callback_data="topup_amount_1000"),
             InlineKeyboardButton(text="Другая сумма", callback_data="topup_amount_custom"),
         ],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="balance_menu")],
+        [
+            InlineKeyboardButton(text="🪙 Крипта", callback_data=f"topup_crypto_{need}"),
+        ],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -177,6 +167,29 @@ def open_webapp_kb(user_id: int) -> InlineKeyboardMarkup:
                 )
             ]
         ]
+    )
+
+
+# =========================
+# TOPUP UI (SINGLE ENTRY)
+# =========================
+async def show_topup_amounts(chat_id: int, user_id: int, need_rub: int = 0) -> None:
+    """
+    Всегда показываем сразу выбор суммы.
+    """
+    bal = _get_balance_kopecks(user_id)
+    need_line = f"\n\nНе хватает: <b>{int(need_rub)} ₽</b>" if need_rub and need_rub > 0 else ""
+    text = (
+        "💳 <b>Пополнить баланс</b>\n\n"
+        f"Текущий баланс: <b>{_format_rub_from_kopecks(bal)}</b>"
+        f"{need_line}\n\n"
+        "Выберите сумму пополнения:"
+    )
+    await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=topup_amounts_kb(need_rub=need_rub),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -204,8 +217,7 @@ async def cmd_start(message: types.Message):
                 need_rub = int(payload.replace("topup_need_", "").strip())
             except Exception:
                 need_rub = 0
-
-        await show_topup_menu(message.chat.id, user_id, need_rub=need_rub)
+        await show_topup_amounts(message.chat.id, user_id, need_rub=need_rub)
         return
 
     welcome_text = """🚀 Приветствую!
@@ -252,13 +264,9 @@ async def cmd_balance(message: types.Message):
 # =========================
 # MAIN MENU CALLBACKS
 # =========================
-@dp.callback_query(lambda c: c.data == "accounts")
-async def accounts_callback(callback: types.CallbackQuery):
-    await callback.message.answer("🔐 Аккаунты в разработке")
-
-
 @dp.callback_query(lambda c: c.data == "balance_menu")
 async def balance_menu_callback(callback: types.CallbackQuery):
+    await callback.answer()
     user_id = callback.from_user.id
     bal = _get_balance_kopecks(user_id)
     text = (
@@ -278,31 +286,20 @@ async def balance_menu_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "balance_topup")
 async def balance_topup_callback(callback: types.CallbackQuery):
+    await callback.answer()
     user_id = callback.from_user.id
-    await show_topup_menu(callback.message.chat.id, user_id, need_rub=0)
+    await show_topup_amounts(callback.message.chat.id, user_id, need_rub=0)
 
 
+# =========================
+# TOPUP ROUTER (AMOUNTS + CRYPTO)
+# =========================
 @dp.callback_query(lambda c: c.data.startswith("topup_"))
 async def topup_router(callback: types.CallbackQuery):
-    """
-    topup_yk_{need}
-    topup_crypto_{need}
-    topup_amount_{X}
-    """
     user_id = callback.from_user.id
     data = callback.data
 
-    if data.startswith("topup_yk_"):
-        need = int(data.replace("topup_yk_", "") or 0)
-        if need > 0:
-            await send_topup_invoice(chat_id=callback.from_user.id, amount_rub=need, reason="Пополнение баланса")
-        else:
-            await callback.message.answer(
-                "💳 <b>Пополнение через ЮKassa</b>\n\nВыберите сумму:",
-                reply_markup=topup_amounts_kb(),
-                parse_mode=ParseMode.HTML,
-            )
-        return
+    await callback.answer()
 
     if data.startswith("topup_crypto_"):
         need = int(data.replace("topup_crypto_", "") or 0)
@@ -317,7 +314,7 @@ async def topup_router(callback: types.CallbackQuery):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="◀️ Назад", callback_data="balance_topup")],
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
                     [InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=_webapp_url_for_user(user_id)))],
                 ]
             ),
@@ -326,16 +323,18 @@ async def topup_router(callback: types.CallbackQuery):
 
     if data.startswith("topup_amount_"):
         amount = data.replace("topup_amount_", "")
+
         if amount == "custom":
             awaiting_custom_topup.add(user_id)
             await callback.message.answer(
                 "Введите сумму пополнения в рублях (например: <b>250</b>).",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="balance_menu")]]
+                    inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="back_main")]]
                 ),
             )
             return
+
         try:
             amount_rub = int(amount)
         except Exception:
@@ -345,25 +344,8 @@ async def topup_router(callback: types.CallbackQuery):
             await callback.message.answer("❌ Некорректная сумма.")
             return
 
-        await send_topup_invoice(chat_id=callback.from_user.id, amount_rub=amount_rub, reason="Пополнение баланса")
+        await send_topup_invoice(chat_id=user_id, user_id=user_id, amount_rub=amount_rub, reason="Пополнение баланса")
         return
-
-
-async def show_topup_menu(chat_id: int, user_id: int, need_rub: int = 0) -> None:
-    bal = _get_balance_kopecks(user_id)
-    need_line = f"\n\nНе хватает: <b>{need_rub} ₽</b>" if need_rub > 0 else ""
-    text = (
-        "💳 <b>Пополнить баланс</b>\n\n"
-        f"Текущий баланс: <b>{_format_rub_from_kopecks(bal)}</b>"
-        f"{need_line}\n\n"
-        "Выберите способ пополнения:"
-    )
-    await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=topup_methods_kb(need_rub=need_rub),
-        parse_mode=ParseMode.HTML,
-    )
 
 
 @dp.message(F.text)
@@ -386,71 +368,28 @@ async def custom_topup_amount_handler(message: types.Message):
         return
 
     awaiting_custom_topup.discard(user_id)
-    await send_topup_invoice(chat_id=message.chat.id, amount_rub=amount, reason="Пополнение баланса")
-
-
-# =========================
-# MAILING MENU (оставлено как было)
-# =========================
-@dp.callback_query(lambda c: c.data == "mailing_menu")
-async def mailing_menu_callback(callback: types.CallbackQuery):
-    text = """🤖 <b>Услуги рассылки:</b>
-
-1. <b>Бот для рассылки</b>
-   💰 Стоимость: 300 рублей
-   ⚡ Автоматическая рассылка ваших сообщений
-
-2. <b>Запуск рассылки вашего сообщения</b>
-   💰 Стоимость: 100 рублей
-   ⏰ Длительность: 1 день
-   👥 Охват: до 1000 пользователей
-
-💳 <b>Автоматическая оплата через ЮKassa:</b>"""
-
-    keyboard = [
-        [InlineKeyboardButton(text="🤖 Купить бота (300₽)", callback_data="buy_bot")],
-        [InlineKeyboardButton(text="📞 Поддержка", url="https://t.me/DM_belyi")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-    ]
-    reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-    await callback.message.answer(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-
-
-@dp.callback_query(lambda c: c.data == "buy_bot")
-async def buy_bot_callback(callback: types.CallbackQuery):
-    prices = [LabeledPrice(label="🤖 Бот для рассылки", amount=30000)]  # 300 ₽
-
-    order_id = str(uuid.uuid4())
-    user_orders[order_id] = {
-        "type": "product",
-        "user_id": callback.from_user.id,
-        "service": "bot",
-        "amount": 30000,
-    }
-
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title="🤖 Бот для рассылки",
-        description="Автоматическая рассылка ваших сообщений\nПосле оплаты свяжитесь с @walter_belyi для настройки",
-        payload=order_id,
-        provider_token=PROVIDER_TOKEN,
-        currency="RUB",
-        prices=prices,
-        start_parameter="bot_subscription",
-    )
+    await send_topup_invoice(chat_id=message.chat.id, user_id=user_id, amount_rub=amount, reason="Пополнение баланса")
 
 
 # =========================
 # TOPUP INVOICE
 # =========================
-async def send_topup_invoice(chat_id: int, amount_rub: int, reason: str = "Пополнение") -> None:
+async def send_topup_invoice(chat_id: int, user_id: int, amount_rub: int, reason: str = "Пополнение") -> None:
+    """
+    ВАЖНО: если получите PAYMENT_PROVIDER_INVALID — значит PROVIDER_TOKEN не привязан к этому боту
+    в @BotFather -> Bot Settings -> Payments.
+    """
+    if not PROVIDER_TOKEN:
+        raise RuntimeError(
+            "PROVIDER_TOKEN is not set. Configure payments in @BotFather -> Payments and set PROVIDER_TOKEN env var."
+        )
+
     amount_kopecks = int(amount_rub) * 100
     order_id = str(uuid.uuid4())
 
     user_orders[order_id] = {
         "type": "topup",
-        "user_id": chat_id,
+        "user_id": user_id,
         "amount": amount_kopecks,
         "reason": reason,
     }
@@ -492,8 +431,7 @@ async def successful_payment_handler(message: types.Message):
         return
 
     if order.get("type") == "topup":
-        # пополнение баланса
-        user_id = order["user_id"]
+        user_id = int(order["user_id"])
         amount = int(order["amount"])
         new_bal = _add_balance_kopecks(user_id, amount)
 
@@ -505,29 +443,11 @@ async def successful_payment_handler(message: types.Message):
         )
         await message.answer(text, reply_markup=open_webapp_kb(user_id), parse_mode=ParseMode.HTML)
 
-        del user_orders[order_id]
+        user_orders.pop(order_id, None)
         return
 
-    # продуктовая оплата (оставлено как было)
-    service_name = "🤖 Бот для рассылки" if order.get("service") == "bot" else "📢 Рассылка сообщения"
-
-    success_text = f"""✅ <b>Оплата прошла успешно!</b>
-
-💼 Услуга: {service_name}
-💰 Сумма: {payment.total_amount // 100} ₽
-📦 Номер заказа: {order_id[:8]}
-
-⚡ <b>Что дальше?</b>
-
-Для активации услуги напишите нашему менеджеру:
-📞 @walter_belyi
-
-Укажите в сообщении:
-• Номер заказа: {order_id[:8]}
-• Ваш Telegram ID: {message.from_user.id}
-"""
-    await message.answer(success_text, parse_mode=ParseMode.HTML)
-    del user_orders[order_id]
+    await message.answer("✅ Оплата прошла успешно.", parse_mode=ParseMode.HTML)
+    user_orders.pop(order_id, None)
 
 
 # =========================
@@ -537,7 +457,9 @@ async def successful_payment_handler(message: types.Message):
 async def webapp_data_handler(message: types.Message):
     """
     Сайт отправляет tg.sendData(JSON.stringify(payload))
-    Мы обрабатываем оплату через баланс и подтверждаем пользователю в чате.
+    Мы обрабатываем:
+      - open_topup (показать выбор сумм сразу)
+      - pay_with_balance (списать с внутреннего баланса)
     """
     user_id = message.from_user.id
     try:
@@ -547,15 +469,17 @@ async def webapp_data_handler(message: types.Message):
         return
 
     action = data.get("action")
+
+    # Открыть пополнение (кнопка "+" или "Пополнить" на сайте)
     if action == "open_topup":
-        # Открыть меню пополнения (например, из кнопки на сайте или при нехватке баланса)
         try:
             need_rub = int(float(data.get("need_rub", 0) or 0))
         except Exception:
             need_rub = 0
-        await show_topup_menu(message.chat.id, user_id, need_rub=need_rub)
+        await show_topup_amounts(message.chat.id, user_id, need_rub=need_rub)
         return
 
+    # Оплата заказов внутренним балансом
     if action != "pay_with_balance":
         await message.answer("ℹ️ Команда получена.")
         return
@@ -578,17 +502,20 @@ async def webapp_data_handler(message: types.Message):
 
     if not ok:
         need = max(0, amount_kopecks - before)
+        need_rub = int((need + 99) // 100)
+
         text = (
             "❌ <b>Недостаточно средств на балансе</b>\n\n"
             f"Баланс: <b>{_format_rub_from_kopecks(before)}</b>\n"
             f"Нужно: <b>{_format_rub_from_kopecks(amount_kopecks)}</b>\n"
             f"Не хватает: <b>{_format_rub_from_kopecks(need)}</b>\n\n"
-            "Выберите способ пополнения:"
+            "Выберите сумму пополнения:"
         )
-        await message.answer(text, reply_markup=topup_methods_kb(need_rub=int((need + 99) // 100)), parse_mode=ParseMode.HTML)
+        await message.answer(text, parse_mode=ParseMode.HTML)
+        await show_topup_amounts(message.chat.id, user_id, need_rub=need_rub)
         return
 
-    # успех
+    # успех списания
     text = (
         "✅ <b>Оплата списана с баланса</b>\n\n"
         f"Заказ: <b>{title}</b>\n"
@@ -609,6 +536,7 @@ async def webapp_data_handler(message: types.Message):
 # =========================
 @dp.callback_query(lambda c: c.data == "back_main")
 async def back_main_callback(callback: types.CallbackQuery):
+    await callback.answer()
     user_id = callback.from_user.id
     welcome_text = """🚀 Приветствую!
 
@@ -634,3 +562,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
