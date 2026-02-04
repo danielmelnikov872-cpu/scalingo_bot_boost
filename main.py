@@ -1640,12 +1640,15 @@ async def show_topup_amounts(chat_id: int, user_id: int, need_rub: int = 0) -> N
 
 async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True) -> None:
     bal = _format_rub_from_kopecks(_get_balance_kopecks(user_id))
-    greeting = "🚀 <b>Приветствую!</b>\n\n" if include_greeting else ""
+    greeting = (
+        "👋 <b>Здравствуйте!</b>\n\n"
+        "Вы в <b>Boost Shop</b> — магазине цифровых услуг. Здесь можно оформить заказ прямо в приложении "
+        "или пополнить баланс для быстрой покупки.\n\n"
+    ) if include_greeting else ""
     welcome_text = (
         f"{greeting}"
         f"💳 Ваш баланс: <b>{bal}</b>\n\n"
-        "Чтобы продолжить, нажмите кнопку ниже:\n"
-        "• 🚀 Накрутка и баланс\n"
+        "Чтобы продолжить, нажмите на «🚀 Накрутка и баланс»."
     )
 
     try:
@@ -1664,7 +1667,7 @@ async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True
 async def send_quick_menu(chat_id: int, user_id: int) -> None:
     bal = _format_rub_from_kopecks(_get_balance_kopecks(user_id))
     text = (
-        "Готовы к росту?\n\n"
+        "Добро пожаловать в <b>Boost Shop</b>!\n\n"
         f"💳 Ваш баланс: <b>{bal}</b>\n\n"
         "Доступно:\n"
         "• 📈 Оформить заказ в приложении\n"
