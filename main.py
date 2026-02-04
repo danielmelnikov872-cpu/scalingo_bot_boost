@@ -1643,7 +1643,6 @@ async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True
     greeting = "🚀 <b>Приветствую!</b>\n\n" if include_greeting else ""
     welcome_text = (
         f"{greeting}"
-        "Готовы к росту?\n\n"
         f"💳 Ваш баланс: <b>{bal}</b>\n\n"
         "Чтобы продолжить, нажмите кнопку ниже:\n"
         "• 🚀 Накрутка и баланс\n"
