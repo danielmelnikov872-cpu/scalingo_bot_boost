@@ -1048,6 +1048,8 @@ def _get_order_by_id(order_id: str) -> Optional[Dict[str, Any]]:
 # =========================
 awaiting_custom_topup_card = set()  # user_id awaiting_custom_topup_card
 awaiting_custom_topup_crypto = set()  # user_id
+# последний инвойс по карте на пользователя (чтобы удалять старый)
+_last_tg_invoice: Dict[int, Dict[str, Any]] = {}
 
 
 # =========================
@@ -2239,11 +2241,19 @@ async def send_topup_invoice(chat_id: int, user_id: int, amount_rub: int, reason
     if not PROVIDER_TOKEN:
         raise RuntimeError("PROVIDER_TOKEN is not set (set env PROVIDER_TOKEN=...)")
 
+    # удалить старый инвойс в чате, если был
+    prev = _last_tg_invoice.get(int(user_id))
+    if prev:
+        try:
+            await bot.delete_message(chat_id=prev["chat_id"], message_id=prev["message_id"])
+        except Exception:
+            pass
+
     amount_kopecks = int(amount_rub) * 100
     order_id = str(uuid.uuid4())
     prices = [LabeledPrice(label=f"💳 {reason}", amount=amount_kopecks)]
 
-    await bot.send_invoice(
+    msg = await bot.send_invoice(
         chat_id=chat_id,
         title="💳 Пополнение баланса",
         description=f"{reason}\nПосле оплаты баланс обновится автоматически.",
@@ -2253,6 +2263,14 @@ async def send_topup_invoice(chat_id: int, user_id: int, amount_rub: int, reason
         prices=prices,
         start_parameter="topup_balance",
     )
+
+    _last_tg_invoice[int(user_id)] = {
+        "chat_id": int(chat_id),
+        "message_id": int(msg.message_id),
+        "payload": order_id,
+        "amount_kopecks": int(amount_kopecks),
+        "created_at": int(time.time()),
+    }
 
 
 @dp.pre_checkout_query()
@@ -2275,6 +2293,10 @@ async def successful_payment_handler(message: types.Message):
 
     amount = int(p.total_amount)
     user_id = message.from_user.id
+    payload = getattr(p, "invoice_payload", "")
+    prev = _last_tg_invoice.get(int(user_id))
+    if prev and payload and prev.get("payload") == payload:
+        _last_tg_invoice.pop(int(user_id), None)
 
     new_bal = _add_balance_kopecks(user_id, amount)
 
