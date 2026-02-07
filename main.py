@@ -57,7 +57,13 @@ API_PORT = int(os.getenv("API_PORT", "8080"))
 API_BASE_PATH = os.getenv("API_BASE_PATH", "/api").rstrip("/")
 
 
-WELCOME_PHOTO = os.getenv("WELCOME_PHOTO", "leeee.png")
+WELCOME_PHOTO = os.getenv("WELCOME_PHOTO", "photo_welcome.jpg")
+PHOTO_BOOST_MENU = os.getenv("PHOTO_BOOST_MENU", "photo_boost_menu.jpg")
+PHOTO_TOPUP_MENU = os.getenv("PHOTO_TOPUP_MENU", "photo_topup_menu.jpg")
+PHOTO_CRYPTO_MENU = os.getenv("PHOTO_CRYPTO_MENU", "photo_crypto_menu.jpg")
+PHOTO_PARTNER = os.getenv("PHOTO_PARTNER", "photo_partner.jpg")
+PHOTO_SUPPORT = os.getenv("PHOTO_SUPPORT", "photo_support.jpg")
+PHOTO_RULES = os.getenv("PHOTO_RULES", "photo_rules.jpg")
 
 # Manager notifications
 MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "DM_belyi").lstrip("@").strip() or "DM_belyi"
@@ -1475,6 +1481,32 @@ async def crypto_invoices_watcher() -> None:
 # =========================
 # UI BUILDERS
 # =========================
+async def _send_photo_or_text(
+    chat_id: int,
+    photo_path: str,
+    text: str,
+    reply_markup: Optional[Any] = None,
+    parse_mode: Optional[str] = ParseMode.HTML,
+    disable_web_page_preview: bool = True,
+) -> None:
+    try:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=types.FSInputFile(photo_path),
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+    except Exception as e:
+        logger.error(f"Photo send error ({photo_path}): {e}")
+        await bot.send_message(
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+
 async def _get_bot_username() -> Optional[str]:
     global _BOT_USERNAME_CACHE
     if _BOT_USERNAME_CACHE:
@@ -1637,7 +1669,13 @@ async def show_topup_amounts(chat_id: int, user_id: int, need_rub: int = 0) -> N
         f"{need_line}\n\n"
         "Выберите сумму пополнения:"
     )
-    await bot.send_message(chat_id, text, reply_markup=topup_amounts_kb(need_rub=need), parse_mode=ParseMode.HTML)
+    await _send_photo_or_text(
+        chat_id=chat_id,
+        photo_path=PHOTO_TOPUP_MENU,
+        text=text,
+        reply_markup=topup_amounts_kb(need_rub=need),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True) -> None:
@@ -1653,17 +1691,13 @@ async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True
         "Чтобы продолжить, нажмите на «🚀 Накрутка и баланс»."
     )
 
-    try:
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=types.FSInputFile(WELCOME_PHOTO),
-            caption=welcome_text,
-            reply_markup=main_reply_kb(user_id),
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception as e:
-        logger.error(f"Welcome photo error: {e}")
-        await bot.send_message(chat_id, welcome_text, reply_markup=main_reply_kb(user_id), parse_mode=ParseMode.HTML)
+    await _send_photo_or_text(
+        chat_id=chat_id,
+        photo_path=WELCOME_PHOTO,
+        text=welcome_text,
+        reply_markup=main_reply_kb(user_id),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def send_quick_menu(chat_id: int, user_id: int) -> None:
@@ -1676,7 +1710,13 @@ async def send_quick_menu(chat_id: int, user_id: int) -> None:
         "• ➕ Пополнить баланс (карта или крипта)\n"
         "• Если средств не хватает — бот сам откроет пополнение"
     )
-    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user_id))
+    await _send_photo_or_text(
+        chat_id=chat_id,
+        photo_path=PHOTO_BOOST_MENU,
+        text=text,
+        reply_markup=main_menu_kb(user_id),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def _notify_new_referral(referrer_id: int, referred_id: int) -> None:
@@ -1865,7 +1905,13 @@ async def topup_recommend_callback(callback: types.CallbackQuery):
             [InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_topup_{need}")],
         ]
     )
-    await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await _send_photo_or_text(
+        chat_id=callback.message.chat.id,
+        photo_path=PHOTO_TOPUP_MENU,
+        text=text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @dp.callback_query(lambda c: c.data == "back_main")
@@ -1946,11 +1992,63 @@ async def send_partner_program(chat_id: int, user_id: int) -> None:
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="💡 Советы", callback_data="ref_tips")],
             [InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="ref_copy")],
             [InlineKeyboardButton(text="💸 Вывести", callback_data="ref_withdraw")],
         ]
     )
-    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    await _send_photo_or_text(
+        chat_id=chat_id,
+        photo_path=PHOTO_PARTNER,
+        text=text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@dp.callback_query(lambda c: c.data == "ref_tips")
+async def ref_tips(callback: types.CallbackQuery):
+    await callback.answer()
+    if not callback.message:
+        return
+    text = (
+        "💡 <b>Советы для партнёров</b>\n\n"
+        "Мы собрали лучшие советы для начинающих партнёров, очень рекомендуем с ними ознакомиться."
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📘 Открыть советы",
+                    url="https://telegra.ph/TOP-sposobov-privlekat-klientov-02-07",
+                )
+            ],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="ref_tips_back")],
+        ]
+    )
+    await _send_photo_or_text(
+        chat_id=callback.message.chat.id,
+        photo_path=PHOTO_PARTNER,
+        text=text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@dp.callback_query(lambda c: c.data == "ref_tips_back")
+async def ref_tips_back(callback: types.CallbackQuery):
+    await callback.answer()
+    chat_id = None
+    if callback.message:
+        chat_id = callback.message.chat.id
+    try:
+        if callback.message:
+            await callback.message.delete()
+    except Exception:
+        pass
+    if chat_id is not None:
+        await send_partner_program(chat_id, callback.from_user.id)
 
 
 @dp.message(F.text == "💳 Баланс")
@@ -1985,7 +2083,13 @@ async def menu_support(message: types.Message):
             [InlineKeyboardButton(text="💬 Написать в поддержку", url=f"https://t.me/{MANAGER_USERNAME}")]
         ]
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await _send_photo_or_text(
+        chat_id=message.chat.id,
+        photo_path=PHOTO_SUPPORT,
+        text=text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @dp.message(F.text == "📜 Правила")
@@ -2014,7 +2118,14 @@ async def menu_rules(message: types.Message):
             [InlineKeyboardButton(text="🔐 Политика использования", url="https://telegra.ph/Politika-ispolzovaniya-01-31")]
         ]
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    await _send_photo_or_text(
+        chat_id=message.chat.id,
+        photo_path=PHOTO_RULES,
+        text=text,
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 
 @dp.message(F.text == "🔐 Политика")
@@ -2134,10 +2245,12 @@ async def topup_crypto_menu_callback(callback: types.CallbackQuery):
         return
 
     kb = crypto_amounts_kb(need_rub=need)
-    await callback.message.answer(
-        "🪙 <b>Пополнение криптой</b>\n\nВыберите сумму (в рублях). Оплатить можно USDT/TON/BTC/ETH/USDC.",
-        parse_mode=ParseMode.HTML,
+    await _send_photo_or_text(
+        chat_id=callback.message.chat.id,
+        photo_path=PHOTO_CRYPTO_MENU,
+        text="🪙 <b>Пополнение криптой</b>\n\nВыберите сумму (в рублях). Оплатить можно USDT/TON/BTC/ETH/USDC.",
         reply_markup=kb,
+        parse_mode=ParseMode.HTML,
     )
 
 
