@@ -65,6 +65,14 @@ PHOTO_PARTNER = os.getenv("PHOTO_PARTNER", "photo_partner.jpg")
 PHOTO_SUPPORT = os.getenv("PHOTO_SUPPORT", "photo_support.jpg")
 PHOTO_RULES = os.getenv("PHOTO_RULES", "photo_rules.jpg")
 
+# Special per-user discount (50% by default)
+DISCOUNT_USER_ID = (os.getenv("DISCOUNT_USER_ID") or "").strip()
+try:
+    DISCOUNT_USER_ID_INT = int(DISCOUNT_USER_ID) if DISCOUNT_USER_ID else None
+except Exception:
+    DISCOUNT_USER_ID_INT = None
+DISCOUNT_RATE = Decimal("0.50")
+
 # Manager notifications
 MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "DM_belyi").lstrip("@").strip() or "DM_belyi"
 MANAGER_CHAT_ID = os.getenv("MANAGER_CHAT_ID")  # if set, preferred over username
@@ -688,6 +696,23 @@ def _try_debit_balance_kopecks(user_id: int, amount: int) -> Tuple[bool, int, in
 def _format_rub_from_kopecks(v: int) -> str:
     v = int(v)
     return f"{v // 100} ₽" if v % 100 == 0 else f"{v / 100:.2f} ₽"
+
+
+def _kopecks_to_rub_str(v: int) -> str:
+    return f"{Decimal(int(v)) / Decimal(100):.2f}"
+
+
+def _is_discount_user(user_id: int) -> bool:
+    return bool(DISCOUNT_USER_ID_INT and int(user_id) == int(DISCOUNT_USER_ID_INT))
+
+
+def _apply_discount_kopecks(user_id: int, amount_kopecks: int, discount_applied: bool = False) -> int:
+    if discount_applied:
+        return int(amount_kopecks)
+    if not _is_discount_user(user_id):
+        return int(amount_kopecks)
+    amt = Decimal(int(amount_kopecks)) * DISCOUNT_RATE
+    return int(amt.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _b64url_encode_json(obj: Dict[str, Any]) -> str:
@@ -1345,6 +1370,17 @@ async def _finalize_pending_order_if_possible(user_id: int, source: str) -> bool
     order = pending["order"] if isinstance(pending.get("order"), dict) else {}
     order_id = str(pending.get("order_id") or order.get("order_id") or order.get("orderId") or "")
     amount_need = int(pending.get("amount_kopecks") or 0)
+
+    # Apply discount for special user if not already applied in payload
+    if _is_discount_user(user_id) and not bool(order.get("discount_applied")):
+        amount_need = _apply_discount_kopecks(user_id, amount_need, discount_applied=False)
+        order["discount_applied"] = True
+        order["total_price"] = _kopecks_to_rub_str(amount_need)
+        if order_id:
+            try:
+                _set_pending_order(user_id, order_id, amount_need, json.dumps(order, ensure_ascii=False))
+            except Exception:
+                pass
 
     # Если вдруг уже обработан — очищаем pending
     if order_id and _is_order_processed(order_id):
@@ -2500,6 +2536,11 @@ async def webapp_data_handler(message: types.Message):
         order = _build_order_from_webapp(data)
         total_rub = _parse_decimal_rub(order.get("total_price"))
         amount_kopecks = int((total_rub * 100).to_integral_value())
+        discount_applied = bool(data.get("discount_applied"))
+        amount_kopecks = _apply_discount_kopecks(user_id, amount_kopecks, discount_applied=discount_applied)
+        if _is_discount_user(user_id):
+            order["discount_applied"] = True
+            order["total_price"] = _kopecks_to_rub_str(amount_kopecks)
 
         try:
             order_json = json.dumps(order, ensure_ascii=False)
@@ -2528,6 +2569,11 @@ async def webapp_data_handler(message: types.Message):
         return
 
     amount_kopecks = int((total_rub * 100).to_integral_value())
+    discount_applied = bool(data.get("discount_applied"))
+    amount_kopecks = _apply_discount_kopecks(user_id, amount_kopecks, discount_applied=discount_applied)
+    if _is_discount_user(user_id):
+        order["discount_applied"] = True
+        order["total_price"] = _kopecks_to_rub_str(amount_kopecks)
     if amount_kopecks > 5_000_000 * 100:
         await message.answer("❌ Сумма заказа слишком большая.")
         return
@@ -2828,9 +2874,19 @@ async def api_balance(request: web.Request) -> web.Response:
         init_data = _get_initdata_from_request(request)
         user_id = _user_id_from_init(init_data)
         bal_k = _get_balance_kopecks(user_id)
+        discount_active = _is_discount_user(user_id)
+        discount_rate = float(DISCOUNT_RATE)
+        price_multiplier = discount_rate if discount_active else 1.0
         return await _api_json(
             request,
-            {"ok": True, "balance_kopecks": bal_k, "balance_rub": f"{bal_k/100:.2f}"},
+            {
+                "ok": True,
+                "balance_kopecks": bal_k,
+                "balance_rub": f"{bal_k/100:.2f}",
+                "discount_active": discount_active,
+                "discount_rate": discount_rate,
+                "price_multiplier": price_multiplier,
+            },
         )
     except Exception as e:
         return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
@@ -2959,6 +3015,12 @@ async def api_orders_create(request: web.Request) -> web.Response:
         if amount_kopecks <= 0:
             raise ValueError("bad_amount")
 
+        discount_applied = bool(body.get("discount_applied") or order_in.get("discount_applied"))
+        amount_kopecks = _apply_discount_kopecks(user_id, amount_kopecks, discount_applied=discount_applied)
+        if _is_discount_user(user_id):
+            order_norm["discount_applied"] = True
+            order_norm["total_price"] = _kopecks_to_rub_str(amount_kopecks)
+
         ok, before, after = _try_debit_balance_kopecks(user_id, amount_kopecks)
         if not ok:
             need = max(0, amount_kopecks - before)
@@ -3075,4 +3137,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
