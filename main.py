@@ -56,6 +56,9 @@ API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8080"))
 API_BASE_PATH = os.getenv("API_BASE_PATH", "/api").rstrip("/")
 
+# Минимальная сумма для пополнения картой (Telegram Payments)
+MIN_CARD_TOPUP_RUB = int(os.getenv("MIN_CARD_TOPUP_RUB", "100"))
+
 
 WELCOME_PHOTO = os.getenv("WELCOME_PHOTO", "photo_welcome.jpg")
 PHOTO_BOOST_MENU = os.getenv("PHOTO_BOOST_MENU", "photo_boost_menu.jpg")
@@ -2000,6 +2003,9 @@ async def topup_amount_callback(callback: types.CallbackQuery):
     if amount_rub <= 0:
         await callback.message.answer("❌ Некорректная сумма.")
         return
+    if amount_rub < MIN_CARD_TOPUP_RUB:
+        await callback.message.answer(f"❌ Минимальная сумма пополнения картой — {MIN_CARD_TOPUP_RUB} ₽.")
+        return
 
     try:
         await send_topup_invoice(
@@ -2231,8 +2237,12 @@ async def custom_amount_handler(message: types.Message):
             await message.answer("❌ Введите число больше 0 (например: 250).")
             return
 
-        awaiting_custom_topup_card.discard(user_id)
         amount_rub = int(rub.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if amount_rub < MIN_CARD_TOPUP_RUB:
+            await message.answer(f"❌ Минимальная сумма пополнения картой — {MIN_CARD_TOPUP_RUB} ₽.")
+            return
+
+        awaiting_custom_topup_card.discard(user_id)
         try:
             await send_topup_invoice(chat_id=message.chat.id, user_id=user_id, amount_rub=amount_rub, reason="Пополнение баланса")
         except Exception as e:
