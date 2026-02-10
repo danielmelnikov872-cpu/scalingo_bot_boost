@@ -47,6 +47,7 @@ CRYPTO_PAY_API_BASE = os.getenv("CRYPTO_PAY_API_BASE", "https://pay.crypt.bot/ap
 WEBAPP_URL_BASE = os.getenv("WEBAPP_URL_BASE", "https://www.boostt.ru/")
 WEBAPP_BALANCE_PARAM = os.getenv("WEBAPP_BALANCE_PARAM", "tgBalance")
 WEBAPP_SUCCESS_PARAM = os.getenv("WEBAPP_SUCCESS_PARAM", "tgSuccess")
+ACCOUNTS_WEBAPP_URL_BASE = os.getenv("ACCOUNTS_WEBAPP_URL_BASE", "https://telegramnumbers.ru/")
 
 
 # =========================
@@ -737,6 +738,21 @@ def _webapp_url_for_user(user_id: int, extra_params: Optional[Dict[str, str]] = 
 
     joiner = "&" if "?" in WEBAPP_URL_BASE else "?"
     return f"{WEBAPP_URL_BASE}{joiner}{urlencode(params)}"
+
+
+def _webapp_accounts_url_for_user(user_id: int, extra_params: Optional[Dict[str, str]] = None) -> str:
+    """
+    Генерирует URL для WebApp аккаунтов (index1.html). Баланс передаем только для UI.
+    """
+    bal_k = _get_balance_kopecks(user_id)
+    bal_rub = bal_k / 100.0
+
+    params: Dict[str, str] = {WEBAPP_BALANCE_PARAM: f"{bal_rub:.2f}"}
+    if extra_params:
+        params.update({k: str(v) for k, v in extra_params.items() if v is not None})
+
+    joiner = "&" if "?" in ACCOUNTS_WEBAPP_URL_BASE else "?"
+    return f"{ACCOUNTS_WEBAPP_URL_BASE}{joiner}{urlencode(params)}"
 
 
 # =========================
@@ -1676,9 +1692,11 @@ def main_reply_kb(user_id: int) -> ReplyKeyboardMarkup:
 
 def main_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     webapp_url = _webapp_url_for_user(user_id)
+    accounts_url = _webapp_accounts_url_for_user(user_id)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📈 Накрутка", web_app=WebAppInfo(url=webapp_url))],
+            [InlineKeyboardButton(text="📱 Telegram аккаунты", web_app=WebAppInfo(url=accounts_url))],
             [InlineKeyboardButton(text="➕ Пополнить баланс 💳", callback_data="balance_topup")],
         ]
     )
@@ -1802,6 +1820,7 @@ async def send_quick_menu(chat_id: int, user_id: int) -> None:
         f"💳 Ваш баланс: <b>{bal}</b>\n\n"
         "Доступно:\n"
         "• 📈 Оформить заказ в приложении\n"
+        "• 📱 Купить Telegram аккаунты\n"
         "• ➕ Пополнить баланс (карта или крипта)\n"
         "• Если средств не хватает — бот сам откроет пополнение"
     )
