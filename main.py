@@ -55,6 +55,7 @@ WEBAPP_SUCCESS_PARAM = os.getenv("WEBAPP_SUCCESS_PARAM", "tgSuccess")
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8080"))
 API_BASE_PATH = os.getenv("API_BASE_PATH", "/api").rstrip("/")
+ACCOUNTS_API_BASE_PATH = os.getenv("ACCOUNTS_API_BASE_PATH", "/api-accounts").rstrip("/")
 
 # Минимальная сумма для пополнения картой (Telegram Payments)
 MIN_CARD_TOPUP_RUB = int(os.getenv("MIN_CARD_TOPUP_RUB", "100"))
@@ -975,6 +976,13 @@ def _list_orders(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     return out
 
 
+def _list_orders_accounts(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    # Fetch more and filter in Python (order_json stores service)
+    raw = _list_orders(user_id, limit=max(50, int(limit) * 5))
+    filtered = [o for o in raw if _is_accounts_order_payload(o.get("order") or {})]
+    return filtered[: int(limit)]
+
+
 def _list_all_orders(limit: int = 50) -> List[Dict[str, Any]]:
     if _DB_KIND == "mysql":
         rows = _db_fetchall(
@@ -1041,6 +1049,15 @@ def _get_order(user_id: int, order_id: str) -> Optional[Dict[str, Any]]:
         "status": status,
         "order": payload,
     }
+
+
+def _get_order_accounts(user_id: int, order_id: str) -> Optional[Dict[str, Any]]:
+    row = _get_order(user_id, order_id)
+    if not row:
+        return None
+    if not _is_accounts_order_payload(row.get("order") or {}):
+        return None
+    return row
 
 
 def _get_order_by_id(order_id: str) -> Optional[Dict[str, Any]]:
@@ -1364,6 +1381,45 @@ def _order_success_param(order: Dict[str, Any]) -> Dict[str, str]:
     }
     return {WEBAPP_SUCCESS_PARAM: _b64url_encode_json(payload)}
 
+
+_ACCOUNTS_CATEGORIES = {"us_plus1", "ru_plus7", "ca_plus1", "in_plus95"}
+_ACCOUNTS_SERVICES = {"tg_accounts", "telegram_accounts"}
+_ACCOUNTS_ACTIONS = {"tg_account_order", "telegram_accounts_order", "tg_accounts"}
+
+
+def _is_accounts_order_payload(order: Dict[str, Any]) -> bool:
+    if not isinstance(order, dict):
+        return False
+    svc = str(order.get("service") or order.get("service_name") or "").strip().lower()
+    action = str(order.get("action") or "").strip().lower()
+    category = str(
+        order.get("category")
+        or order.get("category_name")
+        or order.get("categoryName")
+        or ""
+    ).strip().lower()
+    if svc in _ACCOUNTS_SERVICES:
+        return True
+    if action in _ACCOUNTS_ACTIONS:
+        return True
+    if category in _ACCOUNTS_CATEGORIES:
+        return True
+    return False
+
+
+def _force_accounts_order_fields(order: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure accounts order has consistent fields for API filtering and display."""
+    if not isinstance(order, dict):
+        return {}
+    out = dict(order)
+    out["platform"] = out.get("platform") or "telegram"
+    out["service"] = "tg_accounts"
+    if not out.get("category_name"):
+        out["category_name"] = out.get("category") or out.get("categoryName") or "—"
+    if not out.get("quantity"):
+        out["quantity"] = 1
+    out["action"] = out.get("action") or "tg_account_order"
+    return out
 
 async def _finalize_pending_order_if_possible(user_id: int, source: str) -> bool:
     pending = _get_pending_order(user_id)
@@ -3081,9 +3137,178 @@ async def api_orders_create(request: web.Request) -> web.Response:
         return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
 
 
+async def api_accounts_health(request: web.Request) -> web.Response:
+    return await api_health(request)
+
+
+async def api_accounts_meta(request: web.Request) -> web.Response:
+    return await _api_json(
+        request,
+        {
+            "ok": True,
+            "main_bot_username": _MAIN_BOT_USERNAME or "",
+            "api_base": ACCOUNTS_API_BASE_PATH,
+        },
+    )
+
+
+async def api_accounts_balance(request: web.Request) -> web.Response:
+    return await api_balance(request)
+
+
+async def api_accounts_orders_list(request: web.Request) -> web.Response:
+    try:
+        init_data = _get_initdata_from_request(request)
+        user_id = _user_id_from_init(init_data)
+        body = request.get("_json_body") or {}
+        limit = int(body.get("limit") or 50)
+        limit = max(1, min(200, limit))
+        orders = _list_orders_accounts(user_id, limit=limit)
+        slim = [
+            {
+                "order_id": o["order_id"],
+                "created_at": o["created_at"],
+                "category_name": o.get("category_name") or "—",
+                "status": o.get("status") or "new",
+                "link": (
+                    (o.get("order") or {}).get("link")
+                    or (o.get("order") or {}).get("target")
+                    or (o.get("order") or {}).get("url")
+                    or ""
+                ),
+            }
+            for o in orders
+        ]
+        return await _api_json(request, {"ok": True, "orders": slim})
+    except Exception as e:
+        return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
+
+
+async def api_accounts_orders_detail(request: web.Request) -> web.Response:
+    try:
+        init_data = _get_initdata_from_request(request)
+        user_id = _user_id_from_init(init_data)
+        body = request.get("_json_body") or {}
+        order_id = str(body.get("order_id") or "").strip()
+        if not order_id:
+            raise ValueError("no_order_id")
+        row = _get_order_accounts(user_id, order_id)
+        if not row:
+            raise ValueError("order_not_found")
+        amount_k = int(row.get("amount_kopecks") or 0)
+        return await _api_json(
+            request,
+            {
+                "ok": True,
+                "order_id": row.get("order_id"),
+                "created_at": row.get("created_at"),
+                "amount_kopecks": amount_k,
+                "amount_rub": f"{amount_k/100:.2f}",
+                "category_name": row.get("category_name") or "—",
+                "status": row.get("status") or "new",
+                "order": row.get("order") or {},
+            },
+        )
+    except Exception as e:
+        return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
+
+
+async def api_accounts_orders_create(request: web.Request) -> web.Response:
+    """Creates accounts order and debits balance atomically from DB."""
+    try:
+        init_data = _get_initdata_from_request(request)
+        user_id = _user_id_from_init(init_data)
+        body = request.get("_json_body") or {}
+        order_in = body.get("order") if isinstance(body.get("order"), dict) else {}
+        pay_method = str(body.get("pay_method") or "balance")
+
+        if pay_method != "balance":
+            raise ValueError("unsupported_pay_method")
+
+        # Normalize order and amount
+        order_norm = _build_order_from_webapp(order_in)
+        order_norm = _force_accounts_order_fields(order_norm)
+        final_order_id = str(order_norm.get("order_id") or "").strip() or uuid.uuid4().hex
+        order_norm["order_id"] = final_order_id
+
+        # Idempotency: if the same order_id was already processed, do not debit again
+        if _is_order_processed(final_order_id):
+            bal_k = _get_balance_kopecks(user_id)
+            return await _api_json(
+                request,
+                {
+                    "ok": True,
+                    "result": "success",
+                    "order_id": final_order_id,
+                    "balance_kopecks": bal_k,
+                    "balance_rub": f"{bal_k/100:.2f}",
+                },
+            )
+
+        total_rub = _parse_decimal_rub(order_norm.get("total_price"))
+        amount_kopecks = int((total_rub * 100).to_integral_value())
+        if amount_kopecks <= 0:
+            raise ValueError("bad_amount")
+
+        discount_applied = bool(body.get("discount_applied") or order_in.get("discount_applied"))
+        amount_kopecks = _apply_discount_kopecks(user_id, amount_kopecks, discount_applied=discount_applied)
+        if _is_discount_user(user_id):
+            order_norm["discount_applied"] = True
+            order_norm["total_price"] = _kopecks_to_rub_str(amount_kopecks)
+
+        ok, before, after = _try_debit_balance_kopecks(user_id, amount_kopecks)
+        if not ok:
+            need = max(0, amount_kopecks - before)
+            need_rub = int((need + 99) // 100)
+            return await _api_json(
+                request,
+                {
+                    "ok": True,
+                    "result": "insufficient",
+                    "need_rub": need_rub,
+                    "balance_kopecks": before,
+                    "balance_rub": f"{before/100:.2f}",
+                },
+            )
+
+        # Mark as processed (idempotency/audit)
+        try:
+            order_json = json.dumps(order_norm, ensure_ascii=False)
+        except Exception:
+            order_json = "{}"
+        _mark_order_processed(final_order_id, user_id, amount_kopecks, order_json)
+
+        # Create order record (paid) and default status "new"
+        _create_order(user_id, order_norm, amount_kopecks)
+
+        # Send notifications (user + manager)
+        try:
+            await _send_order_notifications(user_id, order_norm, amount_kopecks, after)
+        except Exception:
+            pass
+
+        try:
+            await _apply_referral_reward(user_id, final_order_id, amount_kopecks)
+        except Exception:
+            pass
+
+        return await _api_json(
+            request,
+            {
+                "ok": True,
+                "result": "success",
+                "order_id": final_order_id,
+                "balance_kopecks": after,
+                "balance_rub": f"{after/100:.2f}",
+            },
+        )
+    except Exception as e:
+        return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
+
 async def start_api_server() -> web.AppRunner:
     app = web.Application(middlewares=[_cors_mw, _json_mw])
     base = API_BASE_PATH
+    base_accounts = ACCOUNTS_API_BASE_PATH
 
     app.router.add_get(f"{base}/health", api_health)
     app.router.add_post(f"{base}/meta", api_meta)
@@ -3091,6 +3316,14 @@ async def start_api_server() -> web.AppRunner:
     app.router.add_post(f"{base}/orders/list", api_orders_list)
     app.router.add_post(f"{base}/orders/detail", api_orders_detail)
     app.router.add_post(f"{base}/orders/create", api_orders_create)
+
+    # Accounts WebApp (separate orders)
+    app.router.add_get(f"{base_accounts}/health", api_accounts_health)
+    app.router.add_post(f"{base_accounts}/meta", api_accounts_meta)
+    app.router.add_post(f"{base_accounts}/balance", api_accounts_balance)
+    app.router.add_post(f"{base_accounts}/orders/list", api_accounts_orders_list)
+    app.router.add_post(f"{base_accounts}/orders/detail", api_accounts_orders_detail)
+    app.router.add_post(f"{base_accounts}/orders/create", api_accounts_orders_create)
 
     runner = web.AppRunner(app)
     await runner.setup()
