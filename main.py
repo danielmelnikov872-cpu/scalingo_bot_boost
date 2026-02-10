@@ -1662,7 +1662,7 @@ def main_reply_kb(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="🚀 Накрутка и баланс"),
+                KeyboardButton(text="🚀 Накрутка и аккаунты"),
                 KeyboardButton(text="➕ Пополнить баланс 💳"),
             ],
             [
@@ -1783,7 +1783,7 @@ async def send_welcome(chat_id: int, user_id: int, include_greeting: bool = True
     welcome_text = (
         f"{greeting}"
         f"💳 Ваш баланс: <b>{bal}</b>\n\n"
-        "Чтобы продолжить, нажмите на «🚀 Накрутка и баланс»."
+        "Чтобы продолжить, нажмите на «🚀 Накрутка и аккаунты»."
     )
 
     await _send_photo_or_text(
@@ -2159,7 +2159,7 @@ async def menu_balance_topup(message: types.Message):
     await show_topup_amounts(message.chat.id, message.from_user.id, need_rub=0)
 
 
-@dp.message(F.text == "🚀 Накрутка и баланс")
+@dp.message(F.text == "🚀 Накрутка и аккаунты")
 async def menu_boost_balance(message: types.Message):
     await send_quick_menu(message.chat.id, message.from_user.id)
 
@@ -2274,7 +2274,7 @@ async def custom_amount_handler(message: types.Message):
     raw = (message.text or "").strip().replace(",", ".")
     menu_texts = {
         "💳 Баланс",
-        "🚀 Накрутка и баланс",
+        "🚀 Накрутка и аккаунты",
         "🤝 Партнерская программа",
         "🆘 Поддержка",
         "📜 Правила",
