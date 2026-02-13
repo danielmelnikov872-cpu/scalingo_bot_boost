@@ -39,6 +39,8 @@ from aiogram.types import (
 # CONFIG (ENV ONLY)
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ACCOUNTS_BOT_TOKEN = (os.getenv("ACCOUNTS_BOT_TOKEN") or "").strip()
+ACCOUNTS_BOT_USERNAME = (os.getenv("ACCOUNTS_BOT_USERNAME") or "").strip().lstrip("@")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN")  # Telegram Payments (YooKassa). Configure in @BotFather -> Payments.
 
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")  # Crypto Pay API token from @CryptoBot -> Crypto Pay -> Create App
@@ -1166,6 +1168,18 @@ def _crypto_invoice_url(inv: Dict[str, Any]) -> str:
     )
 
 
+def _parse_crypto_payload_user(payload: str) -> Optional[int]:
+    try:
+        if not payload:
+            return None
+        parts = str(payload).split(":")
+        if len(parts) >= 2 and parts[0] == "topup":
+            return int(parts[1])
+    except Exception:
+        return None
+    return None
+
+
 async def _create_crypto_invoice(user_id: int, amount_rub: Decimal) -> Dict[str, Any]:
     amount_rub = amount_rub.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if amount_rub <= 0:
@@ -1693,10 +1707,20 @@ def main_reply_kb(user_id: int) -> ReplyKeyboardMarkup:
 def main_menu_kb(user_id: int) -> InlineKeyboardMarkup:
     webapp_url = _webapp_url_for_user(user_id)
     accounts_url = _webapp_accounts_url_for_user(user_id)
+    if ACCOUNTS_BOT_USERNAME:
+        accounts_btn = InlineKeyboardButton(
+            text="📱 Telegram аккаунты",
+            url=f"https://t.me/{ACCOUNTS_BOT_USERNAME}",
+        )
+    else:
+        accounts_btn = InlineKeyboardButton(
+            text="📱 Telegram аккаунты",
+            web_app=WebAppInfo(url=accounts_url),
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📈 Накрутка", web_app=WebAppInfo(url=webapp_url))],
-            [InlineKeyboardButton(text="📱 Telegram аккаунты", web_app=WebAppInfo(url=accounts_url))],
+            [accounts_btn],
             [InlineKeyboardButton(text="➕ Пополнить баланс 💳", callback_data="balance_topup")],
         ]
     )
@@ -2422,7 +2446,7 @@ async def start_crypto_topup(chat_id: int, user_id: int, amount_rub: Decimal) ->
     _store_crypto_invoice(invoice_id, user_id, amount_kopecks, f"{amount_rub:.2f}", url)
 
     text = (
-        "🧾 <b>Инвойс на крипто-оплату создан</b>\n\n"
+        "🧾 <b>Счёт на крипто-оплату создан</b>\n\n"
         f"Сумма: <b>{amount_rub:.2f} ₽</b>\n"
         "Оплатите по ссылке ниже. После оплаты баланс начислится автоматически."
     )
@@ -2441,9 +2465,6 @@ async def crypto_check_callback(callback: types.CallbackQuery):
     await callback.answer()
     invoice_id = int(callback.data.replace("crypto_check_", "") or 0)
     meta = _get_crypto_invoice_meta(invoice_id)
-    if not meta:
-        await callback.message.answer("❌ Инвойс не найден.")
-        return
 
     try:
         result = await _crypto_call("getInvoices", {"invoice_ids": str(invoice_id), "count": 100})
@@ -2453,8 +2474,34 @@ async def crypto_check_callback(callback: types.CallbackQuery):
         return
 
     if not inv:
-        await callback.message.answer("❌ Инвойс не найден в Crypto Pay.")
+        await callback.message.answer("❌ Счёт не найден в Crypto Pay.")
         return
+
+    if not meta:
+        payload = inv.get("payload") or ""
+        user_id = _parse_crypto_payload_user(payload)
+        amount_rub_str = str(inv.get("amount") or "0")
+        try:
+            amount_rub = Decimal(amount_rub_str)
+        except Exception:
+            amount_rub = Decimal("0")
+
+        amount_kopecks = int((amount_rub.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100).to_integral_value())
+        pay_url = _crypto_invoice_url(inv)
+
+        if user_id and amount_kopecks > 0 and pay_url:
+            _store_crypto_invoice(invoice_id, user_id, amount_kopecks, f"{amount_rub:.2f}", pay_url)
+            meta = _get_crypto_invoice_meta(invoice_id) or {
+                "invoice_id": invoice_id,
+                "user_id": int(user_id),
+                "amount_kopecks": int(amount_kopecks),
+                "amount_rub": f"{amount_rub:.2f}",
+                "pay_url": str(pay_url),
+                "status": "active",
+            }
+        else:
+            await callback.message.answer("⚠️ Счёт найден, но данные не распознаны. Напишите в поддержку.")
+            return
 
     status = str(inv.get("status"))
     if status == "paid":
@@ -2463,7 +2510,7 @@ async def crypto_check_callback(callback: types.CallbackQuery):
         return
 
     await callback.message.answer(
-        f"ℹ️ Статус инвойса: <b>{status}</b>. Если вы уже оплатили — подождите минуту и проверьте снова.",
+        f"ℹ️ Статус счёта: <b>{status}</b>. Если вы уже оплатили — подождите минуту и проверьте снова.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -2886,6 +2933,23 @@ def _user_id_from_init(init_data: str) -> int:
     return uid
 
 
+def _validate_init_data_accounts(init_data: str) -> Dict[str, Any]:
+    """Validate initData for accounts webapp (uses ACCOUNTS_BOT_TOKEN if set)."""
+    token = (ACCOUNTS_BOT_TOKEN or BOT_TOKEN or "").strip()
+    if not token:
+        raise ValueError("no_token")
+    return _validate_init_data(init_data, token)
+
+
+def _user_id_from_init_accounts(init_data: str) -> int:
+    payload = _validate_init_data_accounts(init_data)
+    u = payload.get("user") or {}
+    uid = int(u.get("id") or 0)
+    if uid <= 0:
+        raise ValueError("no_user_id")
+    return uid
+
+
 # =========================
 # API SERVER (aiohttp)
 # =========================
@@ -3172,13 +3236,22 @@ async def api_accounts_meta(request: web.Request) -> web.Response:
 
 
 async def api_accounts_balance(request: web.Request) -> web.Response:
-    return await api_balance(request)
+    try:
+        init_data = _get_initdata_from_request(request)
+        user_id = _user_id_from_init_accounts(init_data)
+        bal_k = _get_balance_kopecks(user_id)
+        return await _api_json(
+            request,
+            {"ok": True, "balance_kopecks": bal_k, "balance_rub": f"{bal_k/100:.2f}"},
+        )
+    except Exception as e:
+        return await _api_json(request, {"ok": False, "error": str(e)}, status=400)
 
 
 async def api_accounts_orders_list(request: web.Request) -> web.Response:
     try:
         init_data = _get_initdata_from_request(request)
-        user_id = _user_id_from_init(init_data)
+        user_id = _user_id_from_init_accounts(init_data)
         body = request.get("_json_body") or {}
         limit = int(body.get("limit") or 50)
         limit = max(1, min(200, limit))
@@ -3206,7 +3279,7 @@ async def api_accounts_orders_list(request: web.Request) -> web.Response:
 async def api_accounts_orders_detail(request: web.Request) -> web.Response:
     try:
         init_data = _get_initdata_from_request(request)
-        user_id = _user_id_from_init(init_data)
+        user_id = _user_id_from_init_accounts(init_data)
         body = request.get("_json_body") or {}
         order_id = str(body.get("order_id") or "").strip()
         if not order_id:
@@ -3236,7 +3309,7 @@ async def api_accounts_orders_create(request: web.Request) -> web.Response:
     """Creates accounts order and debits balance atomically from DB."""
     try:
         init_data = _get_initdata_from_request(request)
-        user_id = _user_id_from_init(init_data)
+        user_id = _user_id_from_init_accounts(init_data)
         body = request.get("_json_body") or {}
         order_in = body.get("order") if isinstance(body.get("order"), dict) else {}
         pay_method = str(body.get("pay_method") or "balance")
